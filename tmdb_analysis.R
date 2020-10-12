@@ -5,12 +5,11 @@ library(tm)
 theme_set(theme_bw(base_size = 16))
 theme_update(panel.grid.minor = element_blank())
 
-# Чтение данных
 data <- read.csv("tmdb_5000_movies.csv", sep = ",") %>% 
   as_tibble()
 
-## Предварительная обработка данных
-# Кодирование колонки с жанрами
+## Data preprocessing
+# One-hot encoding for genres
 df_genres <- data %>% 
   select(id, genres) %>% 
   mutate(genres = genres %>% 
@@ -25,7 +24,7 @@ df_genres <- data %>%
            paste0("genre.", .)) %>% 
   mutate(value = 1) %>% 
   spread(key = genres, value = value, fill = 0)
-# Кодирование колонки со страной производства
+# One-hot encoding for country
 df_country <- data %>% 
   select(id, production_countries) %>% 
   transmute(id = id, 
@@ -38,11 +37,11 @@ df_country <- data %>%
   mutate(country = country %>% str_remove_all("name:") %>% str_trim() %>% paste0("country.", .)) %>% 
   mutate(value = 1) %>% 
   spread(key = country, value = value, fill = 0)
-# Кодирование текстовой информации
+# Preprocessing and encoding of text-based information
 df_text <- data %>% 
-  select(id, title, tagline) %>% 
+  select(id, title, tagline, overview) %>% 
   transmute(id = id, 
-            text = paste(title, tagline) %>% 
+            text = paste(title, tagline, overview) %>% 
               strsplit(" ")) %>% 
   unnest() %>% 
   mutate(text = text %>% 
@@ -54,36 +53,48 @@ df_text <- data %>%
   filter(text != "") %>% 
   mutate(text = text %>% 
            lemmatize_strings())
-lemmas.freq <- df_text %>% 
-  select(text) %>% 
+document_frequency <- df_text %>% 
   group_by(text) %>% 
-  summarise(count = n())
-df_text <- df_text %>% 
-  distinct() %>% 
-  left_join(lemmas.freq, by = "text") %>% 
-  filter(count > 2) %>% 
-  select(-count) %>% 
-  mutate(text = paste0("lemma.", text)) %>% 
+  summarise(df = n()) %>% 
+  mutate(idf = 1 / df) %>% 
+  ungroup()
+term_frequency <- df_text %>% 
+  left_join(document_frequency, by = "text") %>%
+  filter(df > 12) %>% 
+  select(id, text) %>% 
   mutate(value = 1) %>% 
   spread(key = text, value = value, fill = 0)
 
-# Объединение данных
-data_revenue <- data %>% 
-  select(id, budget, revenue) %>% 
-  left_join(df_genres, by = "id") %>% 
-  left_join(df_country, by = "id") %>% 
-  left_join(df_text, by = "id")
-
-# Графики для быстрой оценки данных
-ggplot(data = data_revenue) + 
-  geom_point(aes(x = budget, y = revenue)) + 
-  scale_x_log10(name = "Бюджет фильма") + 
-  scale_y_log10(name = "Кассовые сборы") + 
-  theme_bw(base_size = 16)
-
-# Оценка способностей предсказательных моделей
-summary(lm(revenue ~ budget, data = data_revenue))
-model <- lm(revenue ~ ., data = data_revenue)
-summary_data <- summary(model)$coefficients %>% 
+## Predictive models
+# Revenue predicting model and a wordcloud with terms that improve revenue
+model.revenue <- lm(revenue ~ ., data = term_frequency %>% left_join(data %>% select(id, revenue), by = "id"))
+summary_data <- summary(model.revenue)$coefficients %>% 
   as_tibble(rownames = "term") %>% 
-  filter(`Pr(>|t|)` < 0.001)
+  arrange(`Pr(>|t|)`) %>% 
+  head(200) %>% 
+  mutate(term = term %>% str_remove("lemma.")) %>% 
+  filter(term != "(Intercept)") %>% 
+  filter(term != "id")
+wordcloud(words = summary_data$term, freq = summary_data$Estimate, colors = brewer.pal(8, "Dark2"))
+
+# genre.Action predicting model and a wordcloud that corresponds to this genre
+model.Action <- glm(genre.Action ~ ., data = term_frequency %>% left_join(df_genres %>% select(id, genre.Action), by = "id"), family = "binomial")
+summary_data <- summary(model.Action)$coefficients %>% 
+  as_tibble(rownames = "term") %>% 
+  arrange(`Pr(>|z|)`) %>% 
+  head(200) %>% 
+  mutate(term = term %>% str_remove("lemma.")) %>% 
+  filter(term != "(Intercept)") %>% 
+  filter(term != "id")
+wordcloud(words = summary_data$term, freq = summary_data$Estimate, max.words = 50, colors = brewer.pal(8, "Dark2"))
+
+# country.Canada predicting model and a wordcloud that corresponds to this country
+model.Canada <- glm(country.Canada ~ ., data = term_frequency %>% left_join(df_country %>% select(id, country.Canada), by = "id"), family = "binomial")
+summary_data <- summary(model.Canada)$coefficients %>% 
+  as_tibble(rownames = "term") %>% 
+  arrange(`Pr(>|z|)`) %>% 
+  head(200) %>% 
+  mutate(term = term %>% str_remove("lemma.")) %>% 
+  filter(term != "(Intercept)") %>% 
+  filter(term != "id")
+wordcloud(words = summary_data$term, freq = summary_data$Estimate, max.words = 50, colors = brewer.pal(8, "Dark2"))
