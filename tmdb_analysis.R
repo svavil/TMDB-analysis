@@ -2,6 +2,7 @@ rm(list = ls())
 library(tidyverse)
 library(textstem)
 library(tm)
+library(wordcloud)
 theme_set(theme_bw(base_size = 16))
 theme_update(panel.grid.minor = element_blank())
 
@@ -62,6 +63,7 @@ term_frequency <- df_text %>%
   left_join(document_frequency, by = "text") %>%
   filter(df > 12) %>% 
   select(id, text) %>% 
+  distinct() %>% 
   mutate(value = 1) %>% 
   spread(key = text, value = value, fill = 0)
 
